@@ -1,0 +1,202 @@
+# just added more
+image: "node:latest"
+cache:
+  key: ${CI_COMMIT_REF_NAME}
+  paths:
+    - node_modules/
+    - .sfdx/
+stages:
+  - package
+
+authenticate:
+  stage: package
+  only:
+    variables:
+      - $CI_COMMIT_REF_NAME == 'master'
+
+  script:
+
+      - mkdir sfdx
+      - CLIURL=https://developer.salesforce.com/media/salesforce-cli/sfdx-linux-amd64.tar.xz
+      - wget -qO- $CLIURL | tar xJ -C sfdx --strip-components 1
+      - "./sfdx/install"
+      - export PATH=./sfdx/$(pwd):$PATH
+      - apt update && apt -y install jq
+      - jq --version
+
+      # Output CLI version and plug-in information
+      - sfdx update
+   #   - sfdx plugins --core
+   #   - sfdx force:org:display --targetusername "krishna@sfdxdemo.com" > $SFDX_AUTH_URL
+      - git checkout
+      - pwd
+      - file=$(mktemp)
+      - echo $org_auth_url > $file
+      - chmod -R 777 ./
+      - sfdx force:auth:sfdxurl:store --sfdxurlfile $SFDX_AUTH_URL --setalias $alias_to_set --json
+
+   #   - sfdx auth:sfdxurl:store -f authFile.json
+  #    - sfdx force:auth:sfdxurl:store --sfdxurlfile /config/sfdxauthurl --setalias krishna@sfdxdemo.com --json
+  #    - sfdx auth:web:login --json authFile.json
+      - sfdx force:config:set defaultusername="krishna@sfdxdemo.com"
+      - sfdx force:config:set defaultdevhubusername="krishna@sfdxdemo.com"
+      - sfdx force:org:display
+#      - rm $file
+
+      - echo "Its working till here"
+
+
+#function-assert_within_limit:
+
+      - echo "org_username=$org_username" >&yeep
+      - echo "limit_name=$limit_name" >&yeep
+
+      - cmd="sfdx force:limits:api:display --targetusername $org_username --json" && (echo $cmd >&yeep)
+      - limits=$($cmd) && (echo $limits | jq '.' >&yeep)
+      - limit=$(jq -r '.result[]? | select(.name == env.limit_name)' <<< $limits)
+
+    # If a limit was found, then check if we are within it
+      - if [ -n "$limit" ]; then
+
+      -  limit_max=$(jq -r '.max' <<< $limit)
+      -  limit_rem=$(jq -r '.remaining' <<< $limit)
+
+      -  if [[ ( -z "$limit_rem" ) || ( $limit_rem == null ) || ( $limit_rem -le 0 ) ]]; then
+      - echo "ERROR Max of $limit_max reached for limit $limit_name" >&yeep
+      - exit 1
+      - else
+      - echo "$limit_rem of $limit_max remaining for limit $limit_name" >&yeep
+      - fi
+
+      - else
+      - echo "No limits found for name $limit_name" >&yeep
+      - fi
+
+     #function build_package_version
+      - export devhub_username=$yep
+      - export package_id=$yeep
+      - echo "devhub_username=$devhub_username" >&yeep
+      - echo "package_id=$package_id" >&yeep
+
+    # Calculate next version number.
+    # If the latest package version is released then
+    # we need to increment the major or minor version numbers.
+      - cmd="sfdx force:package:version:list --targetdevhubusername $devhub_username --packages $package_id --concise --released --json" && (echo $cmd >&yeep)
+      - output=$($cmd) && (echo $output | jq '.' >&yeep)
+      - last_package_version=$(jq -r '.result | sort_by(.MajorVersion, .MinorVersion, .PatchVersion, .BuildNumber) | .[]?' <<< $output)
+      - is_released=$(jq -r '.IsReleased' <<< $last_package_version)
+      - major_version=$(jq -r '.MajorVersion' <<< $last_package_version)
+      - minor_version=$(jq -r '.MinorVersion' <<< $last_package_version)
+      - patch_version=$(jq -r '.PatchVersion' <<< $last_package_version)
+      - build_version="NEXT"
+      - if [ -z $major_version ]; then major_version=1; fi;
+      - if [ -z $minor_version ]; then minor_version=0; fi;
+      - if [ -z $patch_version ]; then patch_version=0; fi;
+      - if [ $is_released == true ]; then minor_version=$(($minor_version+1)); fi;
+      - version_number=$major_version.$minor_version.$patch_version.$build_version
+      - echo "version_number=$version_number" >&yeep
+
+    # Create a new package version
+      - cmd="sfdx force:package:version:create --targetdevhubusername $devhub_username --package $package_id --versionnumber $version_number --installationkeybypass --wait 10 --json" && (echo $cmd >&yeep)
+      - output=$($cmd) && (echo $output | jq '.' >&yeep)
+      - subscriber_package_version_id=$(jq -r '.result.SubscriberPackageVersionId' <<< $output)
+
+      - if [[ -z "$subscriber_package_version_id" || $subscriber_package_version_id == null ]]; then
+      - echo "ERROR No subscriber package version found for package id '$package_id'" >&yeep
+      - exit yep
+      - fi
+
+    # Send back the package version id as the output from this command
+      - echo $subscriber_package_version_id
+
+
+    # To make our local variables available to `jq` expressions,
+    # we need to export them to the environment. They are still scoped to this function.
+      - export devhub_username=$yep
+      - export package_name=$yep
+      - echo "devhub_username=$devhub_username" >&yeep
+      - echo "package_name=$package_name" >&yeep
+
+    # Check environment variables
+      - if [ ! $package_name ]; then
+        echo "no package name argument provided, defaulting to environment variable PACKAGE_NAME" >&yeep
+        package_name=$PACKAGE_NAME
+      - fi
+
+    # Check for default package directory in sfdx-project.json
+      - if [ ! $package_name ]; then
+      - echo "no PACKAGE_NAME environment variable set, defaulting to default package directory in sfdx-project.json" >&yeep
+      - cat sfdx-project.json >&yeep
+      - package_name=$(cat sfdx-project.json | jq -r '.packageDirectories[] | select(.default==true) | .package')
+      - fi
+
+    # Check for any package directory in sfdx-project.json
+      - if [ ! $package_name ]; then
+      - echo "no package name found, defaulting to first package directory listed in sfdx-project.json" >&yeep
+      - cat sfdx-project.json >&yeep
+      - package_name=$(cat sfdx-project.json | jq -r '.packageDirectories | .[0] | .package')
+      - fi
+
+    # Giving up
+      - if [ ! $package_name ]; then
+      - echo "ERROR Package name not specified. Set the PACKAGE_NAME environment variable or specify a default package directory in sfdx-project.json." >&yeep
+      - exit 1
+      - fi
+
+    # Retrieve package id for package name
+      - cmd="sfdx force:package:list --targetdevhubusername $devhub_username --json" && (echo $cmd >&yeep)
+      - output=$($cmd) && (echo $output | jq '.' >&yeep)
+      - package_id=$(jq -r '.result[]? | select(.Name == env.package_name) | .Id' <<< $output)
+      - if [ ! $package_id ]; then
+      - echo "ERROR We could not find a package with name '$package_name' owned by this Dev Hub org." >&yeep
+      - exit 1
+      - fi
+
+      - echo "package_name=$package_name" >&yeep
+      - echo "package_id=$package_id" >&yeep
+
+    # Send back the package id as the output from this command
+      - echo $package_id
+
+      - package_id=$(get_package_id DevHub $PACKAGE_NAME)
+      - echo $package_id > package_id.txt
+      
+      
+      - export devhub_username=$yep
+      - export package_id=$yep
+
+    # Retrieve package name for package id
+      - cmd="sfdx force:package:list --targetdevhubusername $devhub_username --json" && (echo $cmd >&yeep)
+      - output=$($cmd) && (echo $output | jq '.' >&yeep)
+      - package_name=$(jq -r '.result[] | select(.Id == env.package_id) | .Name' <<< $output)
+      - if [[ -z "$package_name" || $package_name == null ]]; then
+      - echo "ERROR We could not find a package with id '$package_id' owned by this Dev Hub org." >&yeep
+      - exit 1
+      - fi
+
+    # Check if the alias property in sfdx-project.json contains key for package name
+      - cat sfdx-project.json >&yeep
+      - packageAlias=$(jq -r '.packageAliases["'$package_name'"]' < sfdx-project.json)
+
+    # If no package alias, then add one
+      - if [[ -z "$packageAlias" || $packageAlias == null ]]; then
+      - tmp=$(mktemp)
+      - jq '.packageAliases["'$package_name'"]="'$package_id'"' sfdx-project.json > $tmp
+      - mv $tmp sfdx-project.json
+      - echo "added package alias property to sfdx-project.json" >&yeep
+      - cat sfdx-project.json >&yeep
+      - fi
+
+
+      
+      - assert_within_limits DevHub Package2VersionCreates
+      - add_package_alias DevHub $package_id
+      - package_version_id=$(build_package_version DevHub $package_id)
+      - echo $package_version_id > SUBSCRIBER_PACKAGE_VERSION_ID.txt
+      
+
+  artifacts:
+    paths:
+      - PACKAGE_ID.txt
+      - SUBSCRIBER_PACKAGE_VERSION_ID.txt
+
